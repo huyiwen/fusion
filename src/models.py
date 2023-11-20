@@ -55,7 +55,7 @@ class AttentionMechanism(nn.Module):
 
     def forward(self, x):
         weights = F.softmax(self.attention(x), dim=1)
-        return (x * weights).sum(dim=1)
+        return (x * weights).sum(dim=1, keepdim=True)
 
 class MM_coordination_model(nn.Module):
     def __init__(self, hyp_params):
@@ -70,7 +70,7 @@ class MM_coordination_model(nn.Module):
         self.attention_v = AttentionMechanism(512)
 
         # Final layers for decision making
-        hidden_size = 512
+        hidden_size = 512 * 3
         self.linear = nn.Linear(hidden_size, hidden_size)
         self.regression = nn.Linear(hidden_size, 1)
 
@@ -85,7 +85,12 @@ class MM_coordination_model(nn.Module):
         attended_v = self.attention_v(feature_v)
 
         # Coordinate the features
-        combined_feature = attended_l + attended_a + attended_v
+        combined_score = attended_l + attended_a + attended_v
+        # print(combined_score.shape, feature_l.shape)
+        feature_l = combined_score * feature_l
+        feature_a = combined_score * feature_a
+        feature_v = combined_score * feature_v
+        combined_feature = torch.cat([feature_l, feature_a, feature_v], dim=1)
 
         # Final decision making
         hidden = self.linear(combined_feature)
