@@ -44,55 +44,61 @@ class MM_fusion_model(nn.Module):
         return output
 
 
-class AttentionMechanism(nn.Module):
-    def __init__(self, feature_dim):
-        super().__init__()
-        self.attention = nn.Sequential(
-            nn.Linear(feature_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, 1)
-        )
+class CrossModalAttention(nn.Module):
+    def __init__(self, input_dim, attention_dim):
+        super(CrossModalAttention, self).__init__()
+        self.attention_layer = nn.Linear(input_dim, attention_dim)
 
-    def forward(self, x):
-        weights = F.softmax(self.attention(x), dim=1)
-        return (x * weights).sum(dim=1, keepdim=True)
+    def forward(self, x1, x2):
+        # x1, x2 are inputs from two different modalities
+        # Apply attention from x1 to x2
+        attention = F.softmax(self.attention_layer(x1), dim=1)
+        print(attention.shape, x1.shape, x2.shape)
+        attended_x2 = attention.unsqueeze(2) @ x2.unsqueeze(1)
+        return attended_x2.sum(dim=1)
+
 
 class MM_coordination_model(nn.Module):
-    def __init__(self, hyp_params):
+
+    def __init__(self, config, text_dim=300, audio_dim=5, video_dim=20, hidden_dim=768):
         super(MM_coordination_model, self).__init__()
-        self.extract_l = Transformer(50, 300)
-        self.extract_a = Transformer(375, 5)
-        self.extract_v = Transformer(500, 20)
+        # Linear layers for each modality
+        self.text_layer = nn.Linear(text_dim * 50, hidden_dim)
+        self.audio_layer = nn.Linear(audio_dim * 375, hidden_dim)
+        self.video_layer = nn.Linear(video_dim * 500, hidden_dim)
 
-        # Attention mechanisms for each modality
-        self.attention_l = AttentionMechanism(512)
-        self.attention_a = AttentionMechanism(512)
-        self.attention_v = AttentionMechanism(512)
+        # Cross-modal attention layers
+        self.audio_video_attention = CrossModalAttention(hidden_dim, hidden_dim)
+        self.video_audio_attention = CrossModalAttention(hidden_dim, hidden_dim)
+        self.text_audio_attention = CrossModalAttention(hidden_dim, hidden_dim)
+        self.text_video_attention = CrossModalAttention(hidden_dim, hidden_dim)
 
-        # Final layers for decision making
-        hidden_size = 512 * 3
-        self.linear = nn.Linear(hidden_size, hidden_size)
-        self.regression = nn.Linear(hidden_size, 1)
+        self.linear = nn.Linear(hidden_dim, hidden_dim)
+        self.regression = nn.Linear(hidden_dim, 1)
 
-    def forward(self, x_l, x_a, x_v):
-        feature_l = self.extract_l(x_l)
-        feature_a = self.extract_a(x_a)
-        feature_v = self.extract_v(x_v)
+    def forward(self, x_l, x_a=None, x_v=None):
+        # Check which modalities are available
+        # print(x_l.shape, x_a.shape, x_v.shape)
+        audio_available = x_a is not None
+        video_available = x_v is not None
 
-        # Apply attention to each modality
-        attended_l = self.attention_l(feature_l)
-        attended_a = self.attention_a(feature_a)
-        attended_v = self.attention_v(feature_v)
+        # Process available modalities
+        text_features = F.relu(self.text_layer(x_l.view(x_l.shape[0], -1)))
+        if audio_available and video_available:
+            audio_features = F.relu(self.audio_layer(x_a.view(x_a.shape[0], -1)))
+            video_features = F.relu(self.video_layer(x_v.view(x_v.shape[0], -1)))
+            # print(audio_features.shape, video_features.shape)
 
-        # Coordinate the features
-        combined_score = attended_l + attended_a + attended_v
-        # print(combined_score.shape, feature_l.shape)
-        feature_l = combined_score * feature_l
-        feature_a = combined_score * feature_a
-        feature_v = combined_score * feature_v
-        combined_feature = torch.cat([feature_l, feature_a, feature_v], dim=1)
+            attended_audio = self.video_audio_attention(video_features, audio_features)
+            attended_video = self.audio_video_attention(audio_features, video_features)
+            text_attended_audio = self.text_audio_attention(text_features, attended_audio)
+            text_attended_video = self.text_video_attention(text_features, attended_video)
+            combined_features = text_features + text_attended_audio + text_attended_video
+        else:
+            combined_features = text_features
 
-        # Final decision making
-        hidden = self.linear(combined_feature)
+        hidden = self.linear(combined_features)
         output = self.regression(hidden)
+
         return output
+

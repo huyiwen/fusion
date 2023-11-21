@@ -52,6 +52,7 @@ parser.add_argument('--aligned', type=bool, default=True,
 
 args = parser.parse_args()
 
+torch.autograd.set_detect_anomaly(True)
 setup_seed(args.seed)
 dataset = str.lower(args.dataset.strip())
 
